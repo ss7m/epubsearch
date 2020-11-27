@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::*;
 use std::io::*;
+use std::path::PathBuf;
 
 use zip::read::*;
 
@@ -36,11 +37,16 @@ fn get_content_file(epub: &mut ZipArchive<File>) -> Option<String> {
 }
 
 fn get_spine_documents(epub: &mut ZipArchive<File>) -> Vec<String> {
-    let content_file = match get_content_file(epub) {
-        Some(file_name) => match epub.by_name(&file_name) {
-            Ok(file) => file,
-            Err(_) => return Vec::new(),
-        },
+    let (content_file, oebps) = match get_content_file(epub) {
+        Some(file_name) => {
+            let mut path = PathBuf::from(file_name.clone());
+            path.pop();
+            let oebps = path.to_str().unwrap().to_owned();
+            match epub.by_name(&file_name) {
+                Ok(file) => (file, oebps),
+                Err(_) => return Vec::new(),
+            }
+        }
         None => return Vec::new(),
     };
 
@@ -103,7 +109,7 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Vec<String> {
             Ok(XmlEvent::StartElement { attributes, .. }) => {
                 let idref = get_attribute(&attributes, "idref");
                 if let Some(href) = idref.and_then(|i| content_ids.remove(&i)) {
-                    spine.push(href);
+                    spine.push(format!("{}/{}", oebps, href));
                 }
             }
             Ok(XmlEvent::EndElement { name, .. }) => {
@@ -122,8 +128,31 @@ fn main() -> std::io::Result<()> {
     let file = File::open("Hanamonogatari.epub")?;
     let mut archive = ZipArchive::new(file)?;
 
-    for doc in get_spine_documents(&mut archive) {
-        println!("{}", doc);
+    let documents = get_spine_documents(&mut archive);
+    for doc in documents {
+        let doc = archive.by_name(&doc).unwrap();
+        let mut in_paragraph = false;
+        for e in EventReader::new(doc) {
+            match e {
+                Ok(XmlEvent::StartElement { name, .. }) => {
+                    if name.local_name == "p" {
+                        in_paragraph = true
+                    }
+                }
+                Ok(XmlEvent::EndElement { name, .. }) => {
+                    if name.local_name == "p" {
+                        println!("");
+                        in_paragraph = false
+                    }
+                }
+                Ok(XmlEvent::Characters(s)) => {
+                    if in_paragraph {
+                        print!("{}", s)
+                    }
+                }
+                _ => continue,
+            }
+        }
     }
 
     Ok(())
