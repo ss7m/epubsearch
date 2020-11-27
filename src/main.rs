@@ -7,10 +7,18 @@ use zip::read::*;
 
 use xml::reader::{EventReader, XmlEvent};
 
+use percent_encoding::percent_decode;
+
+// TODO: parse toc.ncx
+
 fn get_attribute(attributes: &[xml::attribute::OwnedAttribute], name: &str) -> Option<String> {
     for attr in attributes {
         if attr.name.local_name == name {
-            return Some(attr.value.to_owned());
+            return Some(
+                percent_decode(attr.value.as_bytes())
+                    .decode_utf8_lossy()
+                    .into_owned(),
+            );
         }
     }
     None
@@ -41,7 +49,10 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Vec<String> {
         Some(file_name) => {
             let mut path = PathBuf::from(file_name.clone());
             path.pop();
-            let oebps = path.to_str().unwrap().to_owned();
+            let mut oebps = path.to_str().unwrap().to_owned();
+            if oebps != "" {
+                oebps += "/";
+            }
             match epub.by_name(&file_name) {
                 Ok(file) => (file, oebps),
                 Err(_) => return Vec::new(),
@@ -109,7 +120,7 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Vec<String> {
             Ok(XmlEvent::StartElement { attributes, .. }) => {
                 let idref = get_attribute(&attributes, "idref");
                 if let Some(href) = idref.and_then(|i| content_ids.remove(&i)) {
-                    spine.push(format!("{}/{}", oebps, href));
+                    spine.push(format!("{}{}", oebps, href));
                 }
             }
             Ok(XmlEvent::EndElement { name, .. }) => {
@@ -125,7 +136,7 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Vec<String> {
 }
 
 fn main() -> std::io::Result<()> {
-    let file = File::open("Hanamonogatari.epub")?;
+    let file = File::open("Cannibal Magical.epub")?;
     let mut archive = ZipArchive::new(file)?;
 
     let documents = get_spine_documents(&mut archive);
@@ -141,7 +152,7 @@ fn main() -> std::io::Result<()> {
                 }
                 Ok(XmlEvent::EndElement { name, .. }) => {
                     if name.local_name == "p" {
-                        println!("");
+                        println!();
                         in_paragraph = false
                     }
                 }

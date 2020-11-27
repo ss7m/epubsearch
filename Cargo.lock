@@ -64,6 +64,7 @@ dependencies = [
 name = "epubsearch"
 version = "0.1.0"
 dependencies = [
+ "percent-encoding",
  "xml-rs",
  "zip",
 ]
@@ -94,6 +95,12 @@ checksum = "791daaae1ed6889560f8c4359194f56648355540573244a5448a83ba1ecc7435"
 dependencies = [
  "adler32",
 ]
+
+[[package]]
+name = "percent-encoding"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4fd5641d01c8f18a23da7b6fe29298ff4b55afcccdf78973b24cf3175fee32e"
 
 [[package]]
 name = "pkg-config"
