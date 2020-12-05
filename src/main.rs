@@ -1,15 +1,14 @@
+use argh::FromArgs;
+use percent_encoding::percent_decode;
+use regex::Regex;
 use std::collections::HashMap;
 use std::fs::*;
 use std::io::BufReader;
 use std::path::PathBuf;
-
-use zip::read::*;
-use zip::result::ZipError;
-
 use xml::attribute::OwnedAttribute;
 use xml::reader::{EventReader, XmlEvent};
-
-use percent_encoding::percent_decode;
+use zip::read::*;
+use zip::result::ZipError;
 
 #[derive(Debug)]
 enum EpubError {
@@ -166,11 +165,72 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
     Ok((toc, spine))
 }
 
+struct XhtmlTextIterator<'a> {
+    event_reader: EventReader<ZipFile<'a>>,
+}
+
+impl<'a> XhtmlTextIterator<'a> {
+    fn new(file: ZipFile<'a>) -> Self {
+        XhtmlTextIterator {
+            event_reader: EventReader::new(file),
+        }
+    }
+}
+
+impl<'a> Iterator for XhtmlTextIterator<'a> {
+    type Item = String;
+
+    fn next(&mut self) -> Option<String> {
+        loop {
+            let event = match self.event_reader.next() {
+                Ok(event) => event,
+                Err(_) => return None,
+            };
+
+            if is_start_element(&event, "p").is_some() {
+                break;
+            } else if let XmlEvent::EndDocument = event {
+                return None;
+            }
+        }
+
+        let mut text = String::new();
+        loop {
+            let event = match self.event_reader.next() {
+                Ok(event) => event,
+                Err(_) => return None,
+            };
+
+            if is_end_element(&event, "p") {
+                break;
+            } else if let XmlEvent::Characters(s) = event {
+                text += &s;
+            }
+        }
+
+        Some(text)
+    }
+}
+
+#[derive(FromArgs, Debug)]
+/// Search an epub for a regular expression
+struct EpubArgs {
+    #[argh(positional)]
+    /// regular Expression
+    regex: String,
+
+    #[argh(positional)]
+    /// file to search
+    file_name: String,
+}
+
 fn main() {
-    let file = File::open("Cannibal Magical.epub").unwrap();
+    let args: EpubArgs = argh::from_env();
+    let re = Regex::new(&args.regex).unwrap();
+    let file = File::open(args.file_name).unwrap();
     let mut archive = ZipArchive::new(file).unwrap();
 
-    let (toc, spine) = match get_spine_documents(&mut archive) {
+    let (_toc, spine) = match get_spine_documents(&mut archive) {
         Ok(t) => t,
         Err(e) => {
             println!("{:?}", e);
@@ -178,8 +238,13 @@ fn main() {
         }
     };
 
-    println!("{}", toc);
     for doc in spine {
-        println!("{}", doc);
+        let file = archive.by_name(&doc).unwrap();
+        for paragraph in XhtmlTextIterator::new(file) {
+            if re.is_match(paragraph.as_str()) {
+                println!("{}", doc);
+                break;
+            }
+        }
     }
 }

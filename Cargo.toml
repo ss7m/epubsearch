@@ -11,6 +11,7 @@ zip = "*"
 xml-rs = "*"
 percent-encoding = "*"
 regex = "*"
+argh = "*"
 
 [profile.release]
 lto = "fat"
