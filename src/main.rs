@@ -1,17 +1,25 @@
 use std::collections::HashMap;
 use std::fs::*;
-use std::io::*;
+use std::io::BufReader;
 use std::path::PathBuf;
 
 use zip::read::*;
+use zip::result::ZipError;
 
+use xml::attribute::OwnedAttribute;
 use xml::reader::{EventReader, XmlEvent};
 
 use percent_encoding::percent_decode;
 
-// TODO: parse toc.ncx
+#[derive(Debug)]
+enum EpubError {
+    ZipError(ZipError),
+    EpubError(String),
+}
 
-fn get_attribute(attributes: &[xml::attribute::OwnedAttribute], name: &str) -> Option<String> {
+type Result<T> = std::result::Result<T, EpubError>;
+
+fn get_attribute(attributes: &[OwnedAttribute], name: &str) -> Option<String> {
     for attr in attributes {
         if attr.name.local_name == name {
             return Some(
@@ -24,147 +32,154 @@ fn get_attribute(attributes: &[xml::attribute::OwnedAttribute], name: &str) -> O
     None
 }
 
-fn get_content_file(epub: &mut ZipArchive<File>) -> Option<String> {
-    let container = epub.by_name("META-INF/container.xml").ok()?;
-    let container = BufReader::new(container);
-
-    for e in EventReader::new(container) {
-        if let Ok(XmlEvent::StartElement {
+fn is_start_element(event: &XmlEvent, element_name: &str) -> Option<Vec<OwnedAttribute>> {
+    match event {
+        XmlEvent::StartElement {
             name, attributes, ..
-        }) = e
-        {
-            if name.local_name == "rootfile" {
-                return get_attribute(&attributes, "full-path");
+        } => {
+            if name.local_name == element_name {
+                Some(attributes.to_vec())
+            } else {
+                None
             }
-        } else if e.is_err() {
-            return None;
+        }
+        _ => None,
+    }
+}
+
+fn is_end_element(event: &XmlEvent, element_name: &str) -> bool {
+    match event {
+        XmlEvent::EndElement { name, .. } => name.local_name == element_name,
+        _ => false,
+    }
+}
+
+fn get_content_file_name(epub: &mut ZipArchive<File>) -> Result<String> {
+    let container = epub
+        .by_name("META-INF/container.xml")
+        .map_err(EpubError::ZipError)?;
+
+    for e in EventReader::new(BufReader::new(container)) {
+        match e {
+            Ok(event) => {
+                if let Some(attributes) = is_start_element(&event, "rootfile") {
+                    return get_attribute(&attributes, "full-path")
+                        .ok_or_else(|| EpubError::EpubError("Missing Attribute".to_string()));
+                }
+            }
+            Err(_) => return Err(EpubError::EpubError("Invalid Xml".to_string())),
         }
     }
 
-    None
+    Err(EpubError::EpubError(
+        "Malformed META-INF/containter.xml file".to_string(),
+    ))
 }
 
-fn get_spine_documents(epub: &mut ZipArchive<File>) -> Vec<String> {
-    let (content_file, oebps) = match get_content_file(epub) {
-        Some(file_name) => {
-            let mut path = PathBuf::from(file_name.clone());
-            path.pop();
-            let mut oebps = path.to_str().unwrap().to_owned();
-            if oebps != "" {
-                oebps += "/";
-            }
-            match epub.by_name(&file_name) {
-                Ok(file) => (file, oebps),
-                Err(_) => return Vec::new(),
-            }
-        }
-        None => return Vec::new(),
+fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<String>)> {
+    let (content_file, oebps) = {
+        let content_file_name = get_content_file_name(epub)?;
+
+        let content_file = epub
+            .by_name(&content_file_name)
+            .map_err(EpubError::ZipError)?;
+
+        let mut path = PathBuf::from(content_file_name);
+        path.pop();
+        let oebps = match path.to_str() {
+            Some("") => String::new(),
+            Some(s) => s.to_string() + "/",
+            None => return Err(EpubError::EpubError("non utf8 file name".to_string())),
+        };
+
+        (content_file, oebps)
     };
 
     let mut content_parser = EventReader::new(content_file);
 
-    // read file until the manifest starts
-    loop {
-        match content_parser.next() {
-            Ok(XmlEvent::StartElement { name, .. }) => {
-                if name.local_name == "manifest" {
-                    break;
-                }
-            }
-            Err(_) => return Vec::new(),
-            _ => {}
-        }
-    }
+    while content_parser
+        .next()
+        .ok()
+        .and_then(|e| is_start_element(&e, "manifest"))
+        .is_none()
+    {}
 
-    // collect ids of the documents
     let mut content_ids = HashMap::new();
     loop {
-        match content_parser.next() {
-            Ok(XmlEvent::StartElement { attributes, .. }) => {
-                let media_type = get_attribute(&attributes, "media-type");
-                let id = get_attribute(&attributes, "id");
-                let href = get_attribute(&attributes, "href");
+        let event = match content_parser.next() {
+            Ok(event) => event,
+            Err(_) => return Err(EpubError::EpubError("Malformed Xml".to_string())),
+        };
 
-                if let (Some(media_type), Some(id), Some(href)) = (media_type, id, href) {
-                    if media_type == "application/xhtml+xml" {
-                        content_ids.insert(id, href);
-                    }
+        if is_end_element(&event, "manifest") {
+            break;
+        } else if let Some(attrs) = is_start_element(&event, "item") {
+            let media_type = get_attribute(&attrs, "media-type");
+            let id = get_attribute(&attrs, "id");
+            let href = get_attribute(&attrs, "href");
+
+            if let (Some(media_type), Some(id), Some(href)) = (media_type, id, href) {
+                if media_type == "application/xhtml+xml" || media_type == "application/x-dtbncx+xml"
+                {
+                    content_ids.insert(id, href);
                 }
             }
-            Ok(XmlEvent::EndElement { name, .. }) => {
-                if name.local_name == "manifest" {
-                    break;
-                }
-            }
-            Err(_) => return Vec::new(),
-            _ => {}
         }
     }
 
-    // loop until spine (manifest has to appear before spine)
-    loop {
-        match content_parser.next() {
-            Ok(XmlEvent::StartElement { name, .. }) => {
-                if name.local_name == "spine" {
-                    break;
-                }
+    let toc_id = loop {
+        let event = match content_parser.next() {
+            Ok(event) => event,
+            Err(_) => return Err(EpubError::EpubError("Malformed Epub".to_string())),
+        };
+
+        if let Some(attrs) = is_start_element(&event, "spine") {
+            match get_attribute(&attrs, "toc") {
+                Some(toc_id) => break toc_id,
+                None => return Err(EpubError::EpubError("Malformed Epub".to_string())),
             }
-            Err(_) => return Vec::new(),
-            _ => {}
         }
-    }
+    };
+
+    let toc = match content_ids.get(&toc_id) {
+        Some(toc) => format!("{}{}", oebps, toc),
+        None => return Err(EpubError::EpubError("Malformed Epub".to_string())),
+    };
 
     let mut spine = Vec::new();
     loop {
-        match content_parser.next() {
-            Ok(XmlEvent::StartElement { attributes, .. }) => {
-                let idref = get_attribute(&attributes, "idref");
-                if let Some(href) = idref.and_then(|i| content_ids.remove(&i)) {
-                    spine.push(format!("{}{}", oebps, href));
-                }
+        let event = match content_parser.next() {
+            Ok(event) => event,
+            Err(_) => return Err(EpubError::EpubError("Malformed Epub".to_string())),
+        };
+
+        if is_end_element(&event, "spine") {
+            break;
+        } else if let Some(attrs) = is_start_element(&event, "itemref") {
+            let idref = get_attribute(&attrs, "idref");
+            if let Some(href) = idref.and_then(|id| content_ids.get(&id)) {
+                spine.push(format!("{}{}", oebps, href));
             }
-            Ok(XmlEvent::EndElement { name, .. }) => {
-                if name.local_name == "spine" {
-                    break;
-                }
-            }
-            _ => continue,
         }
     }
 
-    spine
+    Ok((toc, spine))
 }
 
-fn main() -> std::io::Result<()> {
-    let file = File::open("Cannibal Magical.epub")?;
-    let mut archive = ZipArchive::new(file)?;
+fn main() {
+    let file = File::open("Cannibal Magical.epub").unwrap();
+    let mut archive = ZipArchive::new(file).unwrap();
 
-    let documents = get_spine_documents(&mut archive);
-    for doc in documents {
-        let doc = archive.by_name(&doc).unwrap();
-        let mut in_paragraph = false;
-        for e in EventReader::new(doc) {
-            match e {
-                Ok(XmlEvent::StartElement { name, .. }) => {
-                    if name.local_name == "p" {
-                        in_paragraph = true
-                    }
-                }
-                Ok(XmlEvent::EndElement { name, .. }) => {
-                    if name.local_name == "p" {
-                        println!();
-                        in_paragraph = false
-                    }
-                }
-                Ok(XmlEvent::Characters(s)) => {
-                    if in_paragraph {
-                        print!("{}", s)
-                    }
-                }
-                _ => continue,
-            }
+    let (toc, spine) = match get_spine_documents(&mut archive) {
+        Ok(t) => t,
+        Err(e) => {
+            println!("{:?}", e);
+            return;
         }
-    }
+    };
 
-    Ok(())
+    println!("{}", toc);
+    for doc in spine {
+        println!("{}", doc);
+    }
 }

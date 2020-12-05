@@ -10,3 +10,9 @@ edition = "2018"
 zip = "*"
 xml-rs = "*"
 percent-encoding = "*"
+regex = "*"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
