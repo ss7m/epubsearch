@@ -2,7 +2,7 @@ use argh::FromArgs;
 use percent_encoding::percent_decode;
 use regex::{Captures, Regex};
 use std::collections::HashMap;
-use std::fs::*;
+use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
 use xml::attribute::OwnedAttribute;
@@ -12,9 +12,9 @@ use zip::result::ZipError;
 
 #[derive(Debug)]
 enum EpubError {
-    ZipError(ZipError),
-    IoError(std::io::Error),
-    EpubError(String),
+    Zip(ZipError),
+    IO(std::io::Error),
+    Epub(String),
 }
 
 type Result<T> = std::result::Result<T, EpubError>;
@@ -57,21 +57,21 @@ fn is_end_element(event: &XmlEvent, element_name: &str) -> bool {
 fn get_content_file_name(epub: &mut ZipArchive<File>) -> Result<String> {
     let container = epub
         .by_name("META-INF/container.xml")
-        .map_err(EpubError::ZipError)?;
+        .map_err(EpubError::Zip)?;
 
     for e in EventReader::new(BufReader::new(container)) {
         match e {
             Ok(event) => {
                 if let Some(attributes) = is_start_element(&event, "rootfile") {
                     return get_attribute(&attributes, "full-path")
-                        .ok_or_else(|| EpubError::EpubError("Missing Attribute".to_string()));
+                        .ok_or_else(|| EpubError::Epub("Missing Attribute".to_string()));
                 }
             }
-            Err(_) => return Err(EpubError::EpubError("Invalid Xml".to_string())),
+            Err(_) => return Err(EpubError::Epub("Invalid Xml".to_string())),
         }
     }
 
-    Err(EpubError::EpubError(
+    Err(EpubError::Epub(
         "Malformed META-INF/containter.xml file".to_string(),
     ))
 }
@@ -80,16 +80,14 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
     let (content_file, oebps) = {
         let content_file_name = get_content_file_name(epub)?;
 
-        let content_file = epub
-            .by_name(&content_file_name)
-            .map_err(EpubError::ZipError)?;
+        let content_file = epub.by_name(&content_file_name).map_err(EpubError::Zip)?;
 
         let mut path = PathBuf::from(content_file_name);
         path.pop();
         let oebps = match path.to_str() {
             Some("") => String::new(),
             Some(s) => s.to_string() + "/",
-            None => return Err(EpubError::EpubError("non utf8 file name".to_string())),
+            None => return Err(EpubError::Epub("non utf8 file name".to_string())),
         };
 
         (content_file, oebps)
@@ -108,7 +106,7 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
     loop {
         let event = match content_parser.next() {
             Ok(event) => event,
-            Err(_) => return Err(EpubError::EpubError("Malformed Xml".to_string())),
+            Err(_) => return Err(EpubError::Epub("Malformed Xml".to_string())),
         };
 
         if is_end_element(&event, "manifest") {
@@ -130,27 +128,27 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
     let toc_id = loop {
         let event = match content_parser.next() {
             Ok(event) => event,
-            Err(_) => return Err(EpubError::EpubError("Malformed Epub".to_string())),
+            Err(_) => return Err(EpubError::Epub("Malformed Epub".to_string())),
         };
 
         if let Some(attrs) = is_start_element(&event, "spine") {
             match get_attribute(&attrs, "toc") {
                 Some(toc_id) => break toc_id,
-                None => return Err(EpubError::EpubError("Malformed Epub".to_string())),
+                None => return Err(EpubError::Epub("Malformed Epub".to_string())),
             }
         }
     };
 
     let toc = match content_ids.get(&toc_id) {
         Some(toc) => format!("{}{}", oebps, toc),
-        None => return Err(EpubError::EpubError("Malformed Epub".to_string())),
+        None => return Err(EpubError::Epub("Malformed Epub".to_string())),
     };
 
     let mut spine = Vec::new();
     loop {
         let event = match content_parser.next() {
             Ok(event) => event,
-            Err(_) => return Err(EpubError::EpubError("Malformed Epub".to_string())),
+            Err(_) => return Err(EpubError::Epub("Malformed Epub".to_string())),
         };
 
         if is_end_element(&event, "spine") {
@@ -238,7 +236,7 @@ fn print_error() {
 /// Search an epub for a regular expression
 struct EpubArgs {
     #[argh(switch, short = 'c')]
-    /// print the number of matches found
+    /// print the number of matching paragraphs
     count: bool,
 
     #[argh(switch, short = 'q')]
@@ -248,6 +246,10 @@ struct EpubArgs {
     #[argh(switch, short = 'i')]
     /// do case insensitive search
     ignore_case: bool,
+
+    #[argh(switch, short = 'w')]
+    /// find matches surrounded by word boundaries
+    word_regexp: bool,
 
     #[argh(positional)]
     /// regular Expression
@@ -266,21 +268,24 @@ fn main() {
         re_string.push_str("(?i)");
     }
     re_string.push_str(&args.regex);
+    if args.word_regexp {
+        re_string = format!(r"\b{}\b", re_string);
+    }
     let re = Regex::new(&re_string).unwrap();
 
     let mut total_matches = 0;
 
     for file_name in args.file_names {
         let mut archive = match File::open(file_name.clone())
-            .map_err(EpubError::IoError)
-            .and_then(|f| ZipArchive::new(f).map_err(EpubError::ZipError))
+            .map_err(EpubError::IO)
+            .and_then(|f| ZipArchive::new(f).map_err(EpubError::Zip))
         {
             Ok(archive) => archive,
             Err(e) => {
                 print_error();
                 match e {
-                    EpubError::IoError(_) => println!("unable to open {}", file_name),
-                    EpubError::ZipError(_) => println!("{} is not a zip archive", file_name),
+                    EpubError::IO(_) => println!("unable to open {}", file_name),
+                    EpubError::Zip(_) => println!("{} is not a zip archive", file_name),
                     _ => println!("you shouldn't see this message"),
                 }
                 continue;
