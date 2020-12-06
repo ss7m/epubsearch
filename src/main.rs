@@ -1,6 +1,6 @@
 use argh::FromArgs;
 use percent_encoding::percent_decode;
-use regex::Regex;
+use regex::{Captures, Regex};
 use std::collections::HashMap;
 use std::fs::*;
 use std::io::BufReader;
@@ -13,6 +13,7 @@ use zip::result::ZipError;
 #[derive(Debug)]
 enum EpubError {
     ZipError(ZipError),
+    IoError(std::io::Error),
     EpubError(String),
 }
 
@@ -165,6 +166,17 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
     Ok((toc, spine))
 }
 
+// TODO: parse the toc to report what chapter the match is found in
+//struct NavMap {
+//    points: Vec<NavPoint>,
+//}
+//
+//struct NavPoint {
+//    label: String,
+//    content_src: String,
+//    points: Vec<NavPoint>,
+//}
+
 struct XhtmlTextIterator<'a> {
     event_reader: EventReader<ZipFile<'a>>,
 }
@@ -212,39 +224,105 @@ impl<'a> Iterator for XhtmlTextIterator<'a> {
     }
 }
 
+fn colorize_matches(captures: &Captures) -> String {
+    captures
+        .get(0)
+        .map_or("".to_string(), |m| format!("\x1b[34m{}\x1b[0m", m.as_str()))
+}
+
+fn print_error() {
+    print!("\x1b[31mError\x1b[0m: ");
+}
+
 #[derive(FromArgs, Debug)]
 /// Search an epub for a regular expression
 struct EpubArgs {
+    #[argh(switch, short = 'c')]
+    /// print the number of matches found
+    count: bool,
+
+    #[argh(switch, short = 'q')]
+    /// produce no output
+    quiet: bool,
+
+    #[argh(switch, short = 'i')]
+    /// do case insensitive search
+    ignore_case: bool,
+
     #[argh(positional)]
     /// regular Expression
     regex: String,
 
     #[argh(positional)]
-    /// file to search
-    file_name: String,
+    /// files to search
+    file_names: Vec<String>,
 }
 
 fn main() {
     let args: EpubArgs = argh::from_env();
-    let re = Regex::new(&args.regex).unwrap();
-    let file = File::open(args.file_name).unwrap();
-    let mut archive = ZipArchive::new(file).unwrap();
 
-    let (_toc, spine) = match get_spine_documents(&mut archive) {
-        Ok(t) => t,
-        Err(e) => {
-            println!("{:?}", e);
-            return;
-        }
-    };
+    let mut re_string = String::new();
+    if args.ignore_case {
+        re_string.push_str("(?i)");
+    }
+    re_string.push_str(&args.regex);
+    let re = Regex::new(&re_string).unwrap();
 
-    for doc in spine {
-        let file = archive.by_name(&doc).unwrap();
-        for paragraph in XhtmlTextIterator::new(file) {
-            if re.is_match(paragraph.as_str()) {
-                println!("{}", doc);
-                break;
+    let mut total_matches = 0;
+
+    for file_name in args.file_names {
+        let mut archive = match File::open(file_name.clone())
+            .map_err(EpubError::IoError)
+            .and_then(|f| ZipArchive::new(f).map_err(EpubError::ZipError))
+        {
+            Ok(archive) => archive,
+            Err(e) => {
+                print_error();
+                match e {
+                    EpubError::IoError(_) => println!("unable to open {}", file_name),
+                    EpubError::ZipError(_) => println!("{} is not a zip archive", file_name),
+                    _ => println!("you shouldn't see this message"),
+                }
+                continue;
+            }
+        };
+
+        let (_toc, spine) = match get_spine_documents(&mut archive) {
+            Ok(t) => t,
+            Err(_) => {
+                print_error();
+                println!("{} may not be an epub file", file_name);
+                continue;
+            }
+        };
+
+        let mut num_matches = 0;
+        for doc in spine {
+            let file = archive.by_name(&doc).unwrap();
+            for (idx, paragraph) in XhtmlTextIterator::new(file).enumerate() {
+                let paragraph = paragraph.as_str();
+                if re.is_match(paragraph) {
+                    num_matches += 1;
+                    if !args.count && !args.quiet {
+                        println!(
+                            "\x1b[32m{}({})\x1b[0m: {}",
+                            file_name,
+                            idx + 1,
+                            re.replace_all(paragraph, colorize_matches)
+                        );
+                    }
+                }
             }
         }
+
+        if args.count && !args.quiet {
+            println!(
+                "\x1b[32m{}\x1b[0m: \x1b[34m{}\x1b[0m",
+                file_name, num_matches
+            );
+        }
+        total_matches += num_matches;
     }
+
+    std::process::exit(total_matches);
 }
