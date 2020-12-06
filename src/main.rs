@@ -7,7 +7,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use xml::attribute::OwnedAttribute;
 use xml::reader::{EventReader, XmlEvent};
-use zip::read::*;
+use zip::read::{ZipArchive, ZipFile};
 use zip::result::ZipError;
 
 #[derive(Debug)]
