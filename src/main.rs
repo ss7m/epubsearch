@@ -400,6 +400,7 @@ fn main() {
                 .unwrap();
             writeln!(&mut stdout, "{}", num_matches).unwrap();
         }
+
         found_match |= num_matches > 0;
     }
 
