@@ -11,6 +11,7 @@ use xml::reader::{EventReader, XmlEvent};
 use zip::read::{ZipArchive, ZipFile};
 use zip::result::ZipError;
 
+// Error struct to collect all possible error types
 #[derive(Debug)]
 enum EpubError {
     Zip(ZipError),
@@ -20,6 +21,8 @@ enum EpubError {
 
 type Result<T> = std::result::Result<T, EpubError>;
 
+// Look for an attribute and return it's value if found among
+// the attribute list of an xml tag
 fn get_attribute(attributes: &[OwnedAttribute], name: &str) -> Option<String> {
     for attr in attributes {
         if attr.name.local_name == name {
@@ -33,6 +36,8 @@ fn get_attribute(attributes: &[OwnedAttribute], name: &str) -> Option<String> {
     None
 }
 
+// If event is a start element event with name element_name
+// return a list of its attributes.
 fn is_start_element(event: &XmlEvent, element_name: &str) -> Option<Vec<OwnedAttribute>> {
     match event {
         XmlEvent::StartElement {
@@ -48,6 +53,7 @@ fn is_start_element(event: &XmlEvent, element_name: &str) -> Option<Vec<OwnedAtt
     }
 }
 
+// return true if event is an end element event with name element_name
 fn is_end_element(event: &XmlEvent, element_name: &str) -> bool {
     match event {
         XmlEvent::EndElement { name, .. } => name.local_name == element_name,
@@ -55,6 +61,7 @@ fn is_end_element(event: &XmlEvent, element_name: &str) -> bool {
     }
 }
 
+// Find the name of the content file of an epub file
 fn get_content_file_name(epub: &mut ZipArchive<File>) -> Result<String> {
     let container = epub
         .by_name("META-INF/container.xml")
@@ -77,7 +84,10 @@ fn get_content_file_name(epub: &mut ZipArchive<File>) -> Result<String> {
     ))
 }
 
+// find the name of the toc file and a list of the xhtml documents in the spine
 fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<String>)> {
+    // oebps is the folder containing the content_file, necessary since
+    // hrefs in the content file are relative to the content file
     let (content_file, oebps) = {
         let content_file_name = get_content_file_name(epub)?;
 
@@ -96,6 +106,7 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
 
     let mut content_parser = EventReader::new(content_file);
 
+    // iterate to the start of the manifest section
     while content_parser
         .next()
         .ok()
@@ -103,6 +114,7 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
         .is_none()
     {}
 
+    // collect the ids for all the xhtml documents
     let mut content_ids = HashMap::new();
     loop {
         let event = match content_parser.next() {
@@ -126,6 +138,7 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
         }
     }
 
+    // iterate to the start of the spine, and find the id for the toc file
     let toc_id = loop {
         let event = match content_parser.next() {
             Ok(event) => event,
@@ -145,6 +158,7 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
         None => return Err(EpubError::Epub("Malformed Epub".to_string())),
     };
 
+    // collect the spine documents
     let mut spine = Vec::new();
     loop {
         let event = match content_parser.next() {
@@ -176,6 +190,7 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
 //    points: Vec<NavPoint>,
 //}
 
+// iterator over the text in the paragraph of an xhtml file
 struct XhtmlTextIterator<'a> {
     event_reader: EventReader<ZipFile<'a>>,
 }
@@ -319,6 +334,7 @@ fn main() {
     let mut total_matches = 0;
 
     for file_name in args.file_names {
+        // open up the file as a zip archive
         let mut archive = match File::open(file_name.clone())
             .map_err(EpubError::IO)
             .and_then(|f| ZipArchive::new(f).map_err(EpubError::Zip))
