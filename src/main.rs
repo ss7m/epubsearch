@@ -223,7 +223,7 @@ impl<'a> Iterator for XhtmlTextIterator<'a> {
     }
 }
 
-fn print_paragraph(stdout: &mut StandardStream, paragraph: &String, matches: Matches) -> usize {
+fn print_paragraph(stdout: &mut StandardStream, paragraph: &str, matches: Matches) -> usize {
     let paragraph = &paragraph[..];
     let mut previous_end = 0;
     let mut num_matches = 0;
@@ -245,7 +245,7 @@ fn print_paragraph(stdout: &mut StandardStream, paragraph: &String, matches: Mat
     stdout.set_color(ColorSpec::new().set_fg(None)).unwrap();
     writeln!(stdout, "{}", &paragraph[previous_end..]).unwrap();
 
-    return num_matches;
+    num_matches
 }
 
 fn print_error(stderr: &mut StandardStream, message: String) {
