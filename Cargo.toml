@@ -12,6 +12,7 @@ xml-rs = "*"
 percent-encoding = "*"
 regex = "*"
 argh = "*"
+termcolor = "*"
 
 [profile.release]
 lto = "fat"

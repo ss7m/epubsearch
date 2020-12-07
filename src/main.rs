@@ -1,10 +1,11 @@
 use argh::FromArgs;
 use percent_encoding::percent_decode;
-use regex::{Captures, Regex};
+use regex::{Matches, Regex};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 use std::path::PathBuf;
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use xml::attribute::OwnedAttribute;
 use xml::reader::{EventReader, XmlEvent};
 use zip::read::{ZipArchive, ZipFile};
@@ -222,14 +223,38 @@ impl<'a> Iterator for XhtmlTextIterator<'a> {
     }
 }
 
-fn colorize_matches(captures: &Captures) -> String {
-    captures
-        .get(0)
-        .map_or("".to_string(), |m| format!("\x1b[34m{}\x1b[0m", m.as_str()))
+fn print_paragraph(stdout: &mut StandardStream, paragraph: &String, matches: Matches) -> usize {
+    let paragraph = &paragraph[..];
+    let mut previous_end = 0;
+    let mut num_matches = 0;
+
+    for m in matches {
+        num_matches += 1;
+        let start = m.start();
+        let end = m.end();
+
+        stdout.set_color(ColorSpec::new().set_fg(None)).unwrap();
+        write!(stdout, "{}", &paragraph[previous_end..start]).unwrap();
+        stdout
+            .set_color(ColorSpec::new().set_fg(Some(Color::Blue)))
+            .unwrap();
+        write!(stdout, "{}", &paragraph[start..end]).unwrap();
+
+        previous_end = end;
+    }
+    stdout.set_color(ColorSpec::new().set_fg(None)).unwrap();
+    writeln!(stdout, "{}", &paragraph[previous_end..]).unwrap();
+
+    return num_matches;
 }
 
-fn print_error() {
-    print!("\x1b[31mError\x1b[0m: ");
+fn print_error(stderr: &mut StandardStream, message: String) {
+    stderr
+        .set_color(ColorSpec::new().set_fg(Some(Color::Red)))
+        .unwrap();
+    write!(stderr, "Error").unwrap();
+    stderr.set_color(ColorSpec::new().set_fg(None)).unwrap();
+    write!(stderr, ": {}", message).unwrap();
 }
 
 #[derive(FromArgs, Debug)]
@@ -251,6 +276,11 @@ struct EpubArgs {
     /// find matches surrounded by word boundaries
     word_regexp: bool,
 
+    #[argh(option, default = "String::from(\"auto\")")]
+    /// whether to print results in color.
+    /// options: always, auto, never
+    color: String,
+
     #[argh(positional)]
     /// regular Expression
     regex: String,
@@ -262,6 +292,19 @@ struct EpubArgs {
 
 fn main() {
     let args: EpubArgs = argh::from_env();
+
+    let color_choice = match args.color.as_str() {
+        "always" => ColorChoice::Always,
+        "auto" => ColorChoice::Auto,
+        "never" => ColorChoice::Never,
+        s => {
+            eprintln!("Invalid color choice: {}", s);
+            return;
+        }
+    };
+
+    let mut stdout = StandardStream::stdout(color_choice);
+    let mut stderr = StandardStream::stderr(color_choice);
 
     let mut re_string = String::new();
     if args.ignore_case {
@@ -282,12 +325,14 @@ fn main() {
         {
             Ok(archive) => archive,
             Err(e) => {
-                print_error();
-                match e {
-                    EpubError::IO(_) => println!("unable to open {}", file_name),
-                    EpubError::Zip(_) => println!("{} is not a zip archive", file_name),
-                    _ => println!("you shouldn't see this message"),
-                }
+                print_error(
+                    &mut stderr,
+                    match e {
+                        EpubError::IO(_) => format!("unable to open {}", file_name),
+                        EpubError::Zip(_) => format!("{} may not be a zip archive", file_name),
+                        _ => "you shouldn't see this message".to_string(),
+                    },
+                );
                 continue;
             }
         };
@@ -295,8 +340,10 @@ fn main() {
         let (_toc, spine) = match get_spine_documents(&mut archive) {
             Ok(t) => t,
             Err(_) => {
-                print_error();
-                println!("{} may not be an epub file", file_name);
+                print_error(
+                    &mut stderr,
+                    format!("{} may not be an epub file", file_name),
+                );
                 continue;
             }
         };
@@ -305,16 +352,18 @@ fn main() {
         for doc in spine {
             let file = archive.by_name(&doc).unwrap();
             for (idx, paragraph) in XhtmlTextIterator::new(file).enumerate() {
-                let paragraph = paragraph.as_str();
-                if re.is_match(paragraph) {
-                    num_matches += 1;
+                if re.is_match(&paragraph) {
+                    let matches = re.find_iter(&paragraph);
                     if !args.count && !args.quiet {
-                        println!(
-                            "\x1b[32m{}({})\x1b[0m: {}",
-                            file_name,
-                            idx + 1,
-                            re.replace_all(paragraph, colorize_matches)
-                        );
+                        stdout
+                            .set_color(ColorSpec::new().set_fg(Some(Color::Green)))
+                            .unwrap();
+                        write!(&mut stdout, "{}({})", file_name, idx).unwrap();
+                        stdout.set_color(ColorSpec::new().set_fg(None)).unwrap();
+                        write!(&mut stdout, ": ").unwrap();
+                        num_matches += print_paragraph(&mut stdout, &paragraph, matches);
+                    } else {
+                        num_matches += matches.count();
                     }
                 }
             }
@@ -329,5 +378,5 @@ fn main() {
         total_matches += num_matches;
     }
 
-    std::process::exit(total_matches);
+    std::process::exit(if total_matches > 0 { 1 } else { 0 });
 }
