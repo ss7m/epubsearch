@@ -353,8 +353,11 @@ fn main() {
             let file = archive.by_name(&doc).unwrap();
             for (idx, paragraph) in XhtmlTextIterator::new(file).enumerate() {
                 if re.is_match(&paragraph) {
+                    if args.quiet {
+                        std::process::exit(0);
+                    }
                     let matches = re.find_iter(&paragraph);
-                    if !args.count && !args.quiet {
+                    if !args.count {
                         stdout
                             .set_color(ColorSpec::new().set_fg(Some(Color::Green)))
                             .unwrap();
@@ -369,7 +372,7 @@ fn main() {
             }
         }
 
-        if args.count && !args.quiet {
+        if args.count {
             println!(
                 "\x1b[32m{}\x1b[0m: \x1b[34m{}\x1b[0m",
                 file_name, num_matches
@@ -378,5 +381,5 @@ fn main() {
         total_matches += num_matches;
     }
 
-    std::process::exit(if total_matches > 0 { 1 } else { 0 });
+    std::process::exit(if total_matches > 0 { 0 } else { 1 });
 }
