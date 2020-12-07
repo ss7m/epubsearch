@@ -269,7 +269,7 @@ fn print_error(stderr: &mut StandardStream, message: String) {
         .unwrap();
     write!(stderr, "Error").unwrap();
     stderr.set_color(ColorSpec::new().set_fg(None)).unwrap();
-    write!(stderr, ": {}", message).unwrap();
+    writeln!(stderr, ": {}", message).unwrap();
 }
 
 #[derive(FromArgs, Debug)]
