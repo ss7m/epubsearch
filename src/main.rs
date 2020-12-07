@@ -389,10 +389,16 @@ fn main() {
         }
 
         if args.count {
-            println!(
-                "\x1b[32m{}\x1b[0m: \x1b[34m{}\x1b[0m",
-                file_name, num_matches
-            );
+            stdout
+                .set_color(ColorSpec::new().set_fg(Some(Color::Green)))
+                .unwrap();
+            write!(&mut stdout, "{}", file_name).unwrap();
+            stdout.set_color(ColorSpec::new().set_fg(None)).unwrap();
+            write!(&mut stdout, ": ").unwrap();
+            stdout
+                .set_color(ColorSpec::new().set_fg(Some(Color::Blue)))
+                .unwrap();
+            writeln!(&mut stdout, "{}", num_matches).unwrap();
         }
         found_match |= num_matches > 0;
     }
