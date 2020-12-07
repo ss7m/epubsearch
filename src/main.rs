@@ -1,4 +1,5 @@
 use argh::FromArgs;
+use atty;
 use percent_encoding::percent_decode;
 use regex::{Matches, Regex};
 use std::collections::HashMap;
@@ -308,18 +309,29 @@ struct EpubArgs {
 fn main() {
     let args: EpubArgs = argh::from_env();
 
-    let color_choice = match args.color.as_str() {
-        "always" => ColorChoice::Always,
-        "auto" => ColorChoice::Auto,
-        "never" => ColorChoice::Never,
+    let (choice_out, choice_err) = match args.color.as_str() {
+        "always" => (ColorChoice::Always, ColorChoice::Always),
+        "auto" => (
+            if atty::is(atty::Stream::Stdout) {
+                ColorChoice::Auto
+            } else {
+                ColorChoice::Never
+            },
+            if atty::is(atty::Stream::Stderr) {
+                ColorChoice::Auto
+            } else {
+                ColorChoice::Never
+            },
+        ),
+        "never" => (ColorChoice::Never, ColorChoice::Never),
         s => {
             eprintln!("Error: Invalid color choice: {}", s);
             std::process::exit(1)
         }
     };
 
-    let mut stdout = StandardStream::stdout(color_choice);
-    let mut stderr = StandardStream::stderr(color_choice);
+    let mut stdout = StandardStream::stdout(choice_out);
+    let mut stderr = StandardStream::stderr(choice_err);
 
     let mut re_string = String::new();
     if args.ignore_case {

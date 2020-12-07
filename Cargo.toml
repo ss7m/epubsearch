@@ -13,6 +13,7 @@ percent-encoding = "*"
 regex = "*"
 argh = "*"
 termcolor = "*"
+atty = "*"
 
 [profile.release]
 lto = "fat"
