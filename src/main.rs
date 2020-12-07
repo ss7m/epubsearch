@@ -331,7 +331,7 @@ fn main() {
     }
     let re = Regex::new(&re_string).unwrap();
 
-    let mut total_matches = 0;
+    let mut found_match = false;
 
     for file_name in args.file_names {
         // open up the file as a zip archive
@@ -394,8 +394,8 @@ fn main() {
                 file_name, num_matches
             );
         }
-        total_matches += num_matches;
+        found_match |= num_matches > 0;
     }
 
-    std::process::exit(if total_matches > 0 { 0 } else { 1 });
+    std::process::exit(if found_match { 0 } else { 1 });
 }
