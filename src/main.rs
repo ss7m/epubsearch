@@ -313,8 +313,8 @@ fn main() {
         "auto" => ColorChoice::Auto,
         "never" => ColorChoice::Never,
         s => {
-            eprintln!("Invalid color choice: {}", s);
-            return;
+            eprintln!("Error: Invalid color choice: {}", s);
+            std::process::exit(1)
         }
     };
 
@@ -329,7 +329,13 @@ fn main() {
     if args.word_regexp {
         re_string = format!(r"\b{}\b", re_string);
     }
-    let re = Regex::new(&re_string).unwrap();
+    let re = match Regex::new(&re_string) {
+        Ok(re) => re,
+        Err(_) => {
+            print_error(&mut stderr, "invalid regular expression".to_string());
+            std::process::exit(1)
+        }
+    };
 
     let mut found_match = false;
 
@@ -366,7 +372,14 @@ fn main() {
 
         let mut num_matches = 0;
         for doc in spine {
-            let file = archive.by_name(&doc).unwrap();
+            let file = match archive.by_name(&doc) {
+                Ok(file) => file,
+                Err(_) => {
+                    print_error(&mut stderr, format!("{} is a malformed epub", doc));
+                    continue;
+                }
+            };
+
             for (idx, paragraph) in XhtmlTextIterator::new(file).enumerate() {
                 if re.is_match(&paragraph) {
                     if args.quiet {
