@@ -84,8 +84,9 @@ fn get_content_file_name(epub: &mut ZipArchive<File>) -> Result<String> {
     ))
 }
 
-// find the name of the toc file and a list of the xhtml documents in the spine
-fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<String>)> {
+// find the name of the toc file, the name of the oebps folder,
+// and a list of the xhtml documents in the spine
+fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, String, Vec<String>)> {
     // oebps is the folder containing the content_file, necessary since
     // hrefs in the content file are relative to the content file
     let (content_file, oebps) = {
@@ -176,12 +177,25 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
         }
     }
 
-    Ok((toc, spine))
+    Ok((toc, oebps, spine))
 }
 
 #[derive(Debug)]
 struct NavMap {
     points: Vec<NavPoint>,
+}
+
+impl NavMap {
+    // describe the location of a file in the navMap, if it
+    // is in the navmap
+    fn describe(&self, file: &String) -> Option<String> {
+        for point in &self.points {
+            if let Some(description) = point.describe(file) {
+                return Some(description);
+            }
+        }
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -191,7 +205,22 @@ struct NavPoint {
     points: Vec<NavPoint>,
 }
 
-fn parse_toc(toc: ZipFile) -> Option<NavMap> {
+impl NavPoint {
+    fn describe(&self, file: &String) -> Option<String> {
+        if self.content_src == *file {
+            return Some(self.label.clone());
+        } else {
+            for point in &self.points {
+                if let Some(description) = point.describe(file) {
+                    return Some(format!("{} - {}", self.label, description));
+                }
+            }
+            None
+        }
+    }
+}
+
+fn parse_toc(toc: ZipFile, oebps: &str) -> Option<NavMap> {
     let mut event_reader = EventReader::new(toc);
 
     // loop until the start of the navmap
@@ -213,7 +242,7 @@ fn parse_toc(toc: ZipFile) -> Option<NavMap> {
         if is_end_element(&event, "navMap") {
             break;
         } else if is_start_element(&event, "navPoint").is_some() {
-            match parse_nav_point(&mut event_reader) {
+            match parse_nav_point(&mut event_reader, oebps) {
                 Some(point) => points.push(point),
                 None => return None,
             }
@@ -224,7 +253,7 @@ fn parse_toc(toc: ZipFile) -> Option<NavMap> {
 }
 
 // when this is called, event_reader has already seen the start of the nav point
-fn parse_nav_point(event_reader: &mut EventReader<ZipFile>) -> Option<NavPoint> {
+fn parse_nav_point(event_reader: &mut EventReader<ZipFile>, oebps: &str) -> Option<NavPoint> {
     let mut label = String::new();
     let mut content_src = String::new();
     let mut points = Vec::new();
@@ -252,10 +281,10 @@ fn parse_nav_point(event_reader: &mut EventReader<ZipFile>) -> Option<NavPoint> 
             }
         } else if let Some(attrs) = is_start_element(&event, "content") {
             if let Some(src) = get_attribute(&attrs, "src") {
-                content_src = src;
+                content_src = format!("{}{}", oebps, src);
             }
         } else if is_start_element(&event, "navPoint").is_some() {
-            match parse_nav_point(event_reader) {
+            match parse_nav_point(event_reader, oebps) {
                 Some(ps) => points.push(ps),
                 None => return None,
             }
@@ -448,7 +477,7 @@ fn main() {
             }
         };
 
-        let (toc, spine) = match get_spine_documents(&mut archive) {
+        let (toc, oebps, spine) = match get_spine_documents(&mut archive) {
             Ok(t) => t,
             Err(_) => {
                 print_error(
@@ -459,17 +488,25 @@ fn main() {
             }
         };
 
-        let toc = match archive.by_name(&toc).ok().and_then(parse_toc) {
+        let toc = match archive
+            .by_name(&toc)
+            .ok()
+            .and_then(|t| parse_toc(t, &oebps))
+        {
             Some(toc) => toc,
             None => {
                 print_error(&mut stderr, "Error reading table of contents".to_string());
                 std::process::exit(0);
             }
         };
-        println!("{:#?}", toc);
 
         let mut num_matches = 0;
+        let mut chapter = String::new();
         for doc in spine {
+            match toc.describe(&doc) {
+                Some(c) => chapter = c,
+                None => {}
+            }
             let file = match archive.by_name(&doc) {
                 Ok(file) => file,
                 Err(_) => {
@@ -477,8 +514,7 @@ fn main() {
                     continue;
                 }
             };
-
-            for (idx, paragraph) in XhtmlTextIterator::new(file).enumerate() {
+            for paragraph in XhtmlTextIterator::new(file) {
                 if re.is_match(&paragraph) {
                     if args.quiet {
                         std::process::exit(0);
@@ -488,7 +524,7 @@ fn main() {
                         stdout
                             .set_color(ColorSpec::new().set_fg(Some(Color::Green)))
                             .unwrap();
-                        write!(&mut stdout, "{}({})", file_name, idx).unwrap();
+                        write!(&mut stdout, "{}({})", file_name, chapter).unwrap();
                         stdout.set_color(ColorSpec::new().set_fg(None)).unwrap();
                         write!(&mut stdout, ": ").unwrap();
                         num_matches += print_paragraph(&mut stdout, &paragraph, matches);
