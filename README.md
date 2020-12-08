@@ -17,8 +17,3 @@ Options:
                     never
   --help            display usage information
 ```
-
-## TODO
-
-* More QOL command line options
-* Parse the table of contents file to report the chapter a match was found in
