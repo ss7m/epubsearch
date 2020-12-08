@@ -190,7 +190,7 @@ struct NavMap {
 impl NavMap {
     // describe the location of a file in the navMap, if it
     // is in the navmap
-    fn describe(&self, file: &String) -> Option<String> {
+    fn describe(&self, file: &str) -> Option<String> {
         for point in &self.points {
             if let Some(description) = point.describe(file) {
                 return Some(description);
@@ -208,9 +208,9 @@ struct NavPoint {
 }
 
 impl NavPoint {
-    fn describe(&self, file: &String) -> Option<String> {
+    fn describe(&self, file: &str) -> Option<String> {
         if self.content_src == *file {
-            return Some(self.label.clone());
+            Some(self.label.clone())
         } else {
             for point in &self.points {
                 if let Some(description) = point.describe(file) {
@@ -507,9 +507,8 @@ fn main() {
         let mut chapter = String::new();
         for doc in spine {
             // TODO: reimplement this in a much smarter way
-            match toc.describe(&doc) {
-                Some(c) => chapter = c,
-                None => {}
+            if let Some(c) = toc.describe(&doc) {
+                chapter = c;
             }
             let file = match archive.by_name(&doc) {
                 Ok(file) => file,
