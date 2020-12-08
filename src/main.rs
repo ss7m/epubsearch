@@ -1,5 +1,4 @@
 use argh::FromArgs;
-use atty;
 use percent_encoding::percent_decode;
 use regex::{Matches, Regex};
 use std::collections::HashMap;
@@ -180,16 +179,95 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<Strin
     Ok((toc, spine))
 }
 
-// TODO: parse the toc to report what chapter the match is found in
-//struct NavMap {
-//    points: Vec<NavPoint>,
-//}
-//
-//struct NavPoint {
-//    label: String,
-//    content_src: String,
-//    points: Vec<NavPoint>,
-//}
+#[derive(Debug)]
+struct NavMap {
+    points: Vec<NavPoint>,
+}
+
+#[derive(Debug)]
+struct NavPoint {
+    label: String,
+    content_src: String,
+    points: Vec<NavPoint>,
+}
+
+fn parse_toc(toc: ZipFile) -> Option<NavMap> {
+    let mut event_reader = EventReader::new(toc);
+
+    // loop until the start of the navmap
+    while event_reader
+        .next()
+        .ok()
+        .and_then(|e| is_start_element(&e, "navMap"))
+        .is_none()
+    {}
+
+    let mut points = Vec::new();
+
+    loop {
+        let event = match event_reader.next() {
+            Ok(event) => event,
+            Err(_) => return None,
+        };
+
+        if is_end_element(&event, "navMap") {
+            break;
+        } else if is_start_element(&event, "navPoint").is_some() {
+            match parse_nav_point(&mut event_reader) {
+                Some(point) => points.push(point),
+                None => return None,
+            }
+        }
+    }
+
+    Some(NavMap { points })
+}
+
+// when this is called, event_reader has already seen the start of the nav point
+fn parse_nav_point(event_reader: &mut EventReader<ZipFile>) -> Option<NavPoint> {
+    let mut label = String::new();
+    let mut content_src = String::new();
+    let mut points = Vec::new();
+
+    loop {
+        let event = match event_reader.next() {
+            Ok(event) => event,
+            Err(_) => return None,
+        };
+
+        if is_end_element(&event, "navPoint") {
+            break;
+        } else if is_start_element(&event, "navLabel").is_some() {
+            loop {
+                let e = match event_reader.next() {
+                    Ok(e) => e,
+                    Err(_) => return None,
+                };
+
+                if is_end_element(&e, "navLabel") {
+                    break;
+                } else if let XmlEvent::Characters(s) = e {
+                    label.push_str(&s);
+                }
+            }
+        } else if let Some(attrs) = is_start_element(&event, "content") {
+            if let Some(src) = get_attribute(&attrs, "src") {
+                content_src = src;
+            }
+        } else if is_start_element(&event, "navPoint").is_some() {
+            match parse_nav_point(event_reader) {
+                Some(ps) => points.push(ps),
+                None => return None,
+            }
+        }
+    }
+
+    Some(NavPoint {
+        label,
+        content_src,
+        points,
+    })
+}
 
 // iterator over the text in the paragraph of an xhtml file
 struct XhtmlTextIterator<'a> {
@@ -240,7 +318,6 @@ impl<'a> Iterator for XhtmlTextIterator<'a> {
 }
 
 fn print_paragraph(stdout: &mut StandardStream, paragraph: &str, matches: Matches) -> usize {
-    let paragraph = &paragraph[..];
     let mut previous_end = 0;
     let mut num_matches = 0;
 
@@ -371,7 +448,7 @@ fn main() {
             }
         };
 
-        let (_toc, spine) = match get_spine_documents(&mut archive) {
+        let (toc, spine) = match get_spine_documents(&mut archive) {
             Ok(t) => t,
             Err(_) => {
                 print_error(
@@ -381,6 +458,15 @@ fn main() {
                 continue;
             }
         };
+
+        let toc = match archive.by_name(&toc).ok().and_then(parse_toc) {
+            Some(toc) => toc,
+            None => {
+                print_error(&mut stderr, "Error reading table of contents".to_string());
+                std::process::exit(0);
+            }
+        };
+        println!("{:#?}", toc);
 
         let mut num_matches = 0;
         for doc in spine {
@@ -429,5 +515,7 @@ fn main() {
         found_match |= num_matches > 0;
     }
 
+    stdout.reset().unwrap();
+    stderr.reset().unwrap();
     std::process::exit(if found_match { 0 } else { 1 });
 }
