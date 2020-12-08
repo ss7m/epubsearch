@@ -21,6 +21,16 @@ enum EpubError {
 
 type Result<T> = std::result::Result<T, EpubError>;
 
+fn containing_folder(file_name: &str) -> String {
+    let mut path = PathBuf::from(file_name);
+    path.pop();
+    match path.to_str() {
+        Some("") => String::new(),
+        Some(s) => s.to_string() + "/",
+        None => panic!("non utf8 file name"),
+    }
+}
+
 // Look for an attribute and return it's value if found among
 // the attribute list of an xml tag
 fn get_attribute(attributes: &[OwnedAttribute], name: &str) -> Option<String> {
@@ -86,21 +96,13 @@ fn get_content_file_name(epub: &mut ZipArchive<File>) -> Result<String> {
 
 // find the name of the toc file, the name of the oebps folder,
 // and a list of the xhtml documents in the spine
-fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, String, Vec<String>)> {
+fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<String>)> {
     // oebps is the folder containing the content_file, necessary since
     // hrefs in the content file are relative to the content file
     let (content_file, oebps) = {
         let content_file_name = get_content_file_name(epub)?;
-
         let content_file = epub.by_name(&content_file_name).map_err(EpubError::Zip)?;
-
-        let mut path = PathBuf::from(content_file_name);
-        path.pop();
-        let oebps = match path.to_str() {
-            Some("") => String::new(),
-            Some(s) => s.to_string() + "/",
-            None => return Err(EpubError::Epub("non utf8 file name".to_string())),
-        };
+        let oebps = containing_folder(&content_file_name);
 
         (content_file, oebps)
     };
@@ -177,7 +179,7 @@ fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, String, V
         }
     }
 
-    Ok((toc, oebps, spine))
+    Ok((toc, spine))
 }
 
 #[derive(Debug)]
@@ -477,7 +479,7 @@ fn main() {
             }
         };
 
-        let (toc, oebps, spine) = match get_spine_documents(&mut archive) {
+        let (toc, spine) = match get_spine_documents(&mut archive) {
             Ok(t) => t,
             Err(_) => {
                 print_error(
@@ -488,6 +490,7 @@ fn main() {
             }
         };
 
+        let oebps = containing_folder(&toc);
         let toc = match archive
             .by_name(&toc)
             .ok()
@@ -503,6 +506,7 @@ fn main() {
         let mut num_matches = 0;
         let mut chapter = String::new();
         for doc in spine {
+            // TODO: reimplement this in a much smarter way
             match toc.describe(&doc) {
                 Some(c) => chapter = c,
                 None => {}
