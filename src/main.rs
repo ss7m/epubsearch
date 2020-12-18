@@ -209,7 +209,7 @@ struct NavPoint {
 
 impl NavPoint {
     fn describe(&self, file: &str) -> Option<String> {
-        if self.content_src == *file {
+        if self.content_src == file {
             Some(self.label.clone())
         } else {
             for point in &self.points {
