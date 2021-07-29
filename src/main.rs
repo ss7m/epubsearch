@@ -19,7 +19,7 @@ enum EpubError {
     Epub(String),
 }
 
-type Result<T> = std::result::Result<T, EpubError>;
+type EpubResult<T> = std::result::Result<T, EpubError>;
 
 fn containing_folder(file_name: &str) -> String {
     let mut path = PathBuf::from(file_name);
@@ -72,7 +72,7 @@ fn is_end_element(event: &XmlEvent, element_name: &str) -> bool {
 }
 
 // Find the name of the content file of an epub file
-fn get_content_file_name(epub: &mut ZipArchive<File>) -> Result<String> {
+fn get_content_file_name(epub: &mut ZipArchive<File>) -> EpubResult<String> {
     let container = epub
         .by_name("META-INF/container.xml")
         .map_err(EpubError::Zip)?;
@@ -96,7 +96,7 @@ fn get_content_file_name(epub: &mut ZipArchive<File>) -> Result<String> {
 
 // find the name of the toc file, the name of the oebps folder,
 // and a list of the xhtml documents in the spine
-fn get_spine_documents(epub: &mut ZipArchive<File>) -> Result<(String, Vec<String>)> {
+fn get_spine_documents(epub: &mut ZipArchive<File>) -> EpubResult<(String, Vec<String>)> {
     // oebps is the folder containing the content_file, necessary since
     // hrefs in the content file are relative to the content file
     let (content_file, oebps) = {
